@@ -24,11 +24,16 @@ const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const dist2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
+function fingerExtended(w, mcp, pip, tip) {
+  return dist3(w[tip], w[0]) > dist3(w[pip], w[0]) * 1.12 &&
+    dist3(w[tip], w[mcp]) > dist3(w[pip], w[mcp]) * 1.25;
+}
+
 // Uses metric world landmarks, so the result does not depend on distance to the camera.
 function countFingers(w) {
   let n = 0;
   for (const [mcp, pip, tip] of FINGERS) {
-    if (dist3(w[tip], w[0]) > dist3(w[pip], w[0]) * 1.12 && dist3(w[tip], w[mcp]) > dist3(w[pip], w[mcp]) * 1.25) n++;
+    if (fingerExtended(w, mcp, pip, tip)) n++;
   }
   // Thumb: stuck out when its tip is far from the pinky knuckle relative to palm width.
   if (dist3(w[4], w[17]) > dist3(w[5], w[17]) * 1.4) n++;
@@ -74,6 +79,10 @@ class Track {
     this.rawX = d.x;
     this.rawY = d.y;
     this.pts = d.pts;
+    this.pinching = d.pinching;
+    this.pointing = d.pointing;
+    this.pinchX = (d.pts[4].x + d.pts[8].x) / 2;
+    this.pinchY = (d.pts[4].y + d.pts[8].y) / 2;
     this.x = this.fx.filter(d.x, dt);
     this.y = this.fy.filter(d.y, dt);
     this.size = this.fs.filter(d.size, dt);
@@ -142,6 +151,10 @@ export async function startTracking(video, view) {
       size: Math.max(dist2(pts[0], pts[9]), dist2(pts[5], pts[17]) * 1.3),
       fingers: countFingers(world),
       open: openness(world),
+      pinching: dist3(world[4], world[8]) / dist3(world[0], world[9]) < 0.5,
+      pointing:
+        fingerExtended(world, ...FINGERS[0]) &&
+        FINGERS.slice(1).every(([mcp, pip, tip]) => !fingerExtended(world, mcp, pip, tip)),
       angle: Math.atan2(pts[9].y - pts[0].y, pts[9].x - pts[0].x),
     };
   }
@@ -201,6 +214,14 @@ export async function startTracking(video, view) {
           twist: tool.twist,
           fresh: now - tool.seen < 120,
         },
+        gestures: [lead, tool].filter(Boolean).map((tr) => ({
+          pinching: tr.pinching,
+          pinchX: tr.pinchX,
+          pinchY: tr.pinchY,
+          pointing: tr.pointing,
+          tipX: tr.pts[8].x,
+          tipY: tr.pts[8].y,
+        })),
         hands: [lead, tool].filter(Boolean).map((tr) => tr.pts),
       };
     },

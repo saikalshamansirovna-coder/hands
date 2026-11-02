@@ -163,7 +163,40 @@ const BONES = [
   [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
 ];
 
-function drawHands(hands) {
+let heart = null;
+const starBursts = [];
+
+function drawHeart(x, y, now) {
+  const pulse = 1 + Math.sin(now / 170) * 0.06;
+  sk.save();
+  sk.translate(x, y);
+  sk.scale(pulse, pulse);
+  sk.beginPath();
+  sk.moveTo(0, 22);
+  sk.bezierCurveTo(-48, -8, -24, -40, 0, -18);
+  sk.bezierCurveTo(24, -40, 48, -8, 0, 22);
+  sk.fillStyle = '#ff4f87';
+  sk.shadowColor = '#ff4f87';
+  sk.shadowBlur = 22;
+  sk.fill();
+  sk.restore();
+}
+
+function drawStar(x, y, radius, rotation) {
+  sk.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const r = i % 2 ? radius * 0.42 : radius;
+    const angle = rotation + (i * Math.PI) / 5;
+    const px = x + Math.cos(angle) * r;
+    const py = y + Math.sin(angle) * r;
+    if (i === 0) sk.moveTo(px, py);
+    else sk.lineTo(px, py);
+  }
+  sk.closePath();
+  sk.fill();
+}
+
+function drawHands(hands, gestures, now) {
   sk.clearRect(0, 0, view.W, view.H);
   hands.forEach((pts, i) => {
     sk.strokeStyle = sk.fillStyle = i === 0 ? 'rgba(125,249,255,0.45)' : 'rgba(255,107,214,0.45)';
@@ -180,6 +213,55 @@ function drawHands(hands) {
       sk.fill();
     }
   });
+
+  const pinching = gestures.find((gesture) => gesture.pinching);
+  if (pinching) {
+    heart = { x: pinching.pinchX, y: pinching.pinchY, armed: false };
+  } else if (heart) {
+    const pointer = gestures.find((gesture) => gesture.pointing);
+    if (pointer) {
+      const distance = Math.hypot(pointer.tipX - heart.x, pointer.tipY - heart.y);
+      if (distance > 58) heart.armed = true;
+      else if (heart.armed) {
+        for (let i = 0; i < 14; i++) {
+          const angle = (i / 14) * Math.PI * 2 + Math.random() * 0.2;
+          const speed = 45 + Math.random() * 100;
+          starBursts.push({
+            x: heart.x,
+            y: heart.y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            radius: 4 + Math.random() * 6,
+            rotation: Math.random() * Math.PI,
+            started: now,
+          });
+        }
+        heart.armed = false;
+      }
+    }
+  }
+
+  if (heart) drawHeart(heart.x, heart.y, now);
+  for (let i = starBursts.length - 1; i >= 0; i--) {
+    const star = starBursts[i];
+    const age = (now - star.started) / 1000;
+    if (age >= 0.8) {
+      starBursts.splice(i, 1);
+      continue;
+    }
+    sk.globalAlpha = 1 - age / 0.8;
+    sk.fillStyle = '#ffe66d';
+    sk.shadowColor = '#fff3a1';
+    sk.shadowBlur = 12;
+    drawStar(
+      star.x + star.vx * age,
+      star.y + star.vy * age + 35 * age * age,
+      star.radius * (1 - age * 0.35),
+      star.rotation + age * 3,
+    );
+    sk.globalAlpha = 1;
+    sk.shadowBlur = 0;
+  }
 }
 
 // --- input ------------------------------------------------------------------
@@ -237,7 +319,7 @@ async function main() {
     for (let i = 0; i < n; i++) step(input, dt / n, now / 1000 - dt + ((i + 1) * dt) / n);
     present(dt);
     renderer.render(scene, camera);
-    drawHands(input.hands);
+    drawHands(input.hands, input.gestures ?? [], now);
 
     fps += (1 / Math.max(rawDt, 1e-3) - fps) * 0.05;
     if (frame++ % 10 === 0) {

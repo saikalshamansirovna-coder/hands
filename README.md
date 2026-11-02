@@ -20,6 +20,7 @@ Open the printed URL and allow camera access. `/?demo` drives the figure with a 
   - pinch or close the hand — shrink, open — grow;
   - fast index-finger flick — spin the figure (it keeps spinning by inertia);
   - twist the wrist — roll in the screen plane.
+- Pinch thumb and index finger to place a heart. Point with the index finger, move it away from the heart, then back over it to make stars.
 
 ## Tuning
 
