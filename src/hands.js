@@ -20,6 +20,14 @@ const OPEN_MAX = 0.95;
 const PINCH_MIN = 0.25;
 const PINCH_MAX = 0.9;
 
+// Poke ("tap" towards the camera) with the index finger.
+const TAP_RISE = 0.28; // how far the fingertip must come towards the camera (in palm lengths)...
+const TAP_WINDOW = 260; // ...within this many ms
+const TAP_COOLDOWN = 450; // ms between taps
+const TAP_MIN_POINT = 120; // finger must already be pointing for this long
+const TAP_MAX_SPEED = 900; // px/s: faster sideways movement is a flick, not a tap
+const tapQueue = [];
+
 const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const dist2 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -70,6 +78,12 @@ class Track {
     this.fingers = d.fingers;
     this.vx = this.vy = this.twist = this.openRate = 0;
     this.tipX = this.tipY = this.angle = null;
+    this.ff = new OneEuro(4, 1.0);
+    this.fwdHist = [];
+    this.armed = true;
+    this.peak = 0;
+    this.lastTap = 0;
+    this.pointSince = null;
     this.update(d, now);
   }
 
@@ -106,6 +120,31 @@ class Track {
     this.tipX = tx;
     this.tipY = ty;
     this.angle = d.angle;
+
+    // Tap: the fingertip quickly comes towards the camera relative to the knuckle, then has to retract before the next one.
+    const fwd = this.ff.filter(d.forward, dt);
+    this.pointSince = d.pointing ? (this.pointSince ?? now) : null;
+    this.fwdHist.push({ t: now, v: fwd, x: d.pts[8].x, y: d.pts[8].y });
+    while (this.fwdHist[0].t < now - TAP_WINDOW) this.fwdHist.shift();
+    let start = this.fwdHist[0];
+    for (const h of this.fwdHist) if (h.v < start.v) start = h;
+    if (this.armed) {
+      if (
+        d.pointing &&
+        now - this.pointSince > TAP_MIN_POINT &&
+        now - this.lastTap > TAP_COOLDOWN &&
+        fwd - start.v > TAP_RISE &&
+        Math.hypot(this.vx, this.vy) < TAP_MAX_SPEED
+      ) {
+        tapQueue.push({ x: start.x, y: start.y });
+        this.armed = false;
+        this.lastTap = now;
+        this.peak = fwd;
+      }
+    } else {
+      this.peak = Math.max(this.peak, fwd);
+      if (fwd < this.peak - TAP_RISE * 0.5 || !d.pointing) this.armed = true;
+    }
   }
 }
 
@@ -155,6 +194,8 @@ export async function startTracking(video, view) {
       pointing:
         fingerExtended(world, ...FINGERS[0]) &&
         FINGERS.slice(1).every(([mcp, pip, tip]) => !fingerExtended(world, mcp, pip, tip)),
+      // > 0 when the index tip is closer to the camera than its knuckle (palm lengths).
+      forward: -(world[8].z - world[5].z) / dist3(world[0], world[9]),
       angle: Math.atan2(pts[9].y - pts[0].y, pts[9].x - pts[0].x),
     };
   }
@@ -214,14 +255,7 @@ export async function startTracking(video, view) {
           twist: tool.twist,
           fresh: now - tool.seen < 120,
         },
-        gestures: [lead, tool].filter(Boolean).map((tr) => ({
-          pinching: tr.pinching,
-          pinchX: tr.pinchX,
-          pinchY: tr.pinchY,
-          pointing: tr.pointing,
-          tipX: tr.pts[8].x,
-          tipY: tr.pts[8].y,
-        })),
+        taps: tapQueue.splice(0),
         hands: [lead, tool].filter(Boolean).map((tr) => tr.pts),
       };
     },

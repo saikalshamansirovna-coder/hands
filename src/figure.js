@@ -11,7 +11,10 @@ const GHOST_STEP = 0.4; // frames of history between neighbouring ghosts (sub-fr
 const MORPH_K = 240; // per-vertex spring: underdamped, so the outline wobbles into the new shape
 const MORPH_C = 15;
 
-const COLORS = [0xc8d8ff, 0x7df9ff, 0x7dffb2, 0xffe66d, 0xffa05a, 0xff6bd6].map((c) => new THREE.Color(c));
+// Finger count -> polygon sides. 1 finger: pentagonal prism; 5 fingers: the planet takes over (the figure fades out).
+const SHAPE_SIDES = [0, 5, 2, 3, 4, 0];
+
+const COLORS = [0xc8d8ff, 0x7df9ff, 0x7dffb2, 0xffe66d, 0xffa05a, 0xffcf8a].map((c) => new THREE.Color(c));
 
 // Point on the perimeter of a regular n-gon (radius 1) at fraction t.
 // n = 0 is a circle, n = 1 collapses to a point (the prism becomes a single line).
@@ -70,8 +73,9 @@ export function createFigure(scene) {
   const color = COLORS[0].clone();
   let sides = 0;
 
-  function setSides(n) {
-    sides = n;
+  function setSides(fingers) {
+    sides = fingers;
+    const n = SHAPE_SIDES[fingers];
     for (let i = 0; i < RING; i++) {
       perimeter(n, i / RING, tmp);
       tgt[i * 2] = tmp[0];

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { createFigure } from './figure.js';
+import { createPlanet } from './planet.js';
 import { startTracking } from './hands.js';
 import { clamp, smoothstep } from './filters.js';
 
@@ -30,6 +31,7 @@ renderer.setClearColor(0x000000, 0);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(35, 1, 1, 10000);
 const figure = createFigure(scene);
+const planet = createPlanet(scene);
 
 function resize() {
   view.W = innerWidth;
@@ -63,10 +65,14 @@ let pulse = 0; // decaying kick after the shape changes
 let blur = 0;
 let sides = -1;
 let spinY = 0;
+let planetTarget = 0; // 1 while the lead hand shows five fingers
+let planetMix = 0;
 const omega = new THREE.Vector3();
 const qUser = new THREE.Quaternion();
 const qTilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.5);
 const qSpin = new THREE.Quaternion();
+const qPlanet = new THREE.Quaternion();
+const qPlanetTilt = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.45, 0, -0.38)); // Saturn-like ring tilt
 const qBank = new THREE.Quaternion();
 const dq = new THREE.Quaternion();
 const axis = new THREE.Vector3();
@@ -91,6 +97,8 @@ function step(input, dt, t) {
     vel.x += (CFG.followK * (tx - pos.x) - CFG.followC * vel.x) * dt;
     vel.y += (CFG.followK * (ty - pos.y) - CFG.followC * vel.y) * dt;
     visibility += (1 - visibility) * (1 - Math.exp(-8 * dt));
+
+    planetTarget = lead.fingers === 5 ? 1 : 0;
 
     if (lead.fingers !== sides) {
       const first = sides < 0;
@@ -135,6 +143,7 @@ function step(input, dt, t) {
   // Lean into the motion, like something light being dragged through the air.
   qBank.setFromEuler(euler.set(clamp(vel.y * 0.00045, -0.5, 0.5), 0, clamp(vel.x * 0.00045, -0.5, 0.5)));
 
+  planetMix += (planetTarget - planetMix) * (1 - Math.exp(-7 * dt));
   figure.update(dt);
   pulse *= Math.exp(-5 * dt);
 }
@@ -149,7 +158,9 @@ function present(dt) {
   pose.r = Math.max(1, radius * scale * pop);
   pose.q.copy(qBank).multiply(qUser).multiply(qTilt).multiply(qSpin);
   poses.unshift(pose);
-  figure.place(poses, visibility, clamp(speed / 700 + spin / 8 + pulse, 0, 1));
+  figure.place(poses, visibility * (1 - planetMix), clamp(speed / 700 + spin / 8 + pulse, 0, 1));
+  qPlanet.copy(qBank).multiply(qUser).multiply(qPlanetTilt);
+  planet.place(pos.x, -pos.y, pose.r, qPlanet, visibility * planetMix, performance.now() / 1000);
 
   const blurTarget = clamp(speed / 450 + spin * 0.35 + Math.abs(scaleV) * 0.5 + pulse * 4, 0, CFG.maxBlur);
   blur += (blurTarget - blur) * (1 - Math.exp(-18 * dt));
@@ -163,40 +174,72 @@ const BONES = [
   [11, 12], [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17],
 ];
 
-let heart = null;
-const starBursts = [];
+const stars = [];
+const MAX_STARS = 250;
 
-function drawHeart(x, y, now) {
-  const pulse = 1 + Math.sin(now / 170) * 0.06;
-  sk.save();
-  sk.translate(x, y);
-  sk.scale(pulse, pulse);
-  sk.beginPath();
-  sk.moveTo(0, 22);
-  sk.bezierCurveTo(-48, -8, -24, -40, 0, -18);
-  sk.bezierCurveTo(24, -40, 48, -8, 0, 22);
-  sk.fillStyle = '#ff4f87';
-  sk.shadowColor = '#ff4f87';
-  sk.shadowBlur = 22;
-  sk.fill();
-  sk.restore();
+function addStar(x, y, now) {
+  stars.push({ x, y, born: now, r: 11 + Math.random() * 5, phase: Math.random() * Math.PI * 2 });
+  if (stars.length > MAX_STARS) stars.shift();
 }
 
-function drawStar(x, y, radius, rotation) {
+function starPath(radius, rotation) {
   sk.beginPath();
   for (let i = 0; i < 10; i++) {
-    const r = i % 2 ? radius * 0.42 : radius;
+    const r = i % 2 ? radius * 0.45 : radius;
     const angle = rotation + (i * Math.PI) / 5;
-    const px = x + Math.cos(angle) * r;
-    const py = y + Math.sin(angle) * r;
+    const px = Math.cos(angle) * r;
+    const py = Math.sin(angle) * r;
     if (i === 0) sk.moveTo(px, py);
     else sk.lineTo(px, py);
   }
   sk.closePath();
-  sk.fill();
 }
 
-function drawHands(hands, gestures, now) {
+function drawStars(now) {
+  for (const star of stars) {
+    const age = (now - star.born) / 1000;
+    const k = Math.min(age / 0.5, 1);
+    const pop = 1 + 2.70158 * (k - 1) ** 3 + 1.70158 * (k - 1) ** 2; // ease-out-back
+    const r = star.r * pop * (1 + 0.14 * Math.sin(now / 240 + star.phase));
+
+    if (age < 0.7) {
+      sk.globalAlpha = 1 - age / 0.7;
+      sk.strokeStyle = '#fff3a1';
+      sk.lineWidth = 2;
+      sk.beginPath();
+      sk.arc(star.x, star.y, star.r * (0.8 + age * 5), 0, Math.PI * 2);
+      sk.stroke();
+      sk.globalAlpha = 1;
+    }
+
+    sk.save();
+    sk.translate(star.x, star.y);
+    sk.rotate(Math.sin(now / 1100 + star.phase) * 0.12);
+    const glow = sk.createRadialGradient(0, 0, 0, 0, 0, r * 2.6);
+    glow.addColorStop(0, 'rgba(255,236,150,0.45)');
+    glow.addColorStop(1, 'rgba(255,236,150,0)');
+    sk.fillStyle = glow;
+    sk.beginPath();
+    sk.arc(0, 0, r * 2.6, 0, Math.PI * 2);
+    sk.fill();
+
+    const body = sk.createLinearGradient(0, -r, 0, r);
+    body.addColorStop(0, '#fff6b8');
+    body.addColorStop(1, '#ffc93c');
+    sk.fillStyle = body;
+    sk.shadowColor = '#ffe66d';
+    sk.shadowBlur = 14;
+    starPath(r, -Math.PI / 2);
+    sk.fill();
+    sk.shadowBlur = 0;
+    sk.fillStyle = 'rgba(255,255,255,0.55)';
+    starPath(r * 0.42, -Math.PI / 2);
+    sk.fill();
+    sk.restore();
+  }
+}
+
+function drawHands(hands, now) {
   sk.clearRect(0, 0, view.W, view.H);
   hands.forEach((pts, i) => {
     sk.strokeStyle = sk.fillStyle = i === 0 ? 'rgba(125,249,255,0.45)' : 'rgba(255,107,214,0.45)';
@@ -213,56 +256,11 @@ function drawHands(hands, gestures, now) {
       sk.fill();
     }
   });
-
-  const pinching = gestures.find((gesture) => gesture.pinching);
-  if (pinching) {
-    heart = { x: pinching.pinchX, y: pinching.pinchY, armed: false };
-  } else if (heart) {
-    const pointer = gestures.find((gesture) => gesture.pointing);
-    if (pointer) {
-      const distance = Math.hypot(pointer.tipX - heart.x, pointer.tipY - heart.y);
-      if (distance > 58) heart.armed = true;
-      else if (heart.armed) {
-        for (let i = 0; i < 14; i++) {
-          const angle = (i / 14) * Math.PI * 2 + Math.random() * 0.2;
-          const speed = 45 + Math.random() * 100;
-          starBursts.push({
-            x: heart.x,
-            y: heart.y,
-            vx: Math.cos(angle) * speed,
-            vy: Math.sin(angle) * speed,
-            radius: 4 + Math.random() * 6,
-            rotation: Math.random() * Math.PI,
-            started: now,
-          });
-        }
-        heart.armed = false;
-      }
-    }
-  }
-
-  if (heart) drawHeart(heart.x, heart.y, now);
-  for (let i = starBursts.length - 1; i >= 0; i--) {
-    const star = starBursts[i];
-    const age = (now - star.started) / 1000;
-    if (age >= 0.8) {
-      starBursts.splice(i, 1);
-      continue;
-    }
-    sk.globalAlpha = 1 - age / 0.8;
-    sk.fillStyle = '#ffe66d';
-    sk.shadowColor = '#fff3a1';
-    sk.shadowBlur = 12;
-    drawStar(
-      star.x + star.vx * age,
-      star.y + star.vy * age + 35 * age * age,
-      star.radius * (1 - age * 0.35),
-      star.rotation + age * 3,
-    );
-    sk.globalAlpha = 1;
-    sk.shadowBlur = 0;
-  }
+  drawStars(now);
 }
+
+// A mouse click / screen tap also adds a star (handy without a camera, e.g. in ?demo).
+addEventListener('pointerdown', (e) => addStar(e.clientX, e.clientY, performance.now()));
 
 // --- input ------------------------------------------------------------------
 // `?demo` drives the figure with a synthetic hand, to check rendering without a camera.
@@ -319,15 +317,16 @@ async function main() {
     for (let i = 0; i < n; i++) step(input, dt / n, now / 1000 - dt + ((i + 1) * dt) / n);
     present(dt);
     renderer.render(scene, camera);
-    drawHands(input.hands, input.gestures ?? [], now);
+    for (const tap of input.taps ?? []) addStar(tap.x, tap.y, now);
+    drawHands(input.hands, now);
 
     fps += (1 / Math.max(rawDt, 1e-3) - fps) * 0.05;
     if (frame++ % 10 === 0) {
       statusEl.style.opacity = input.lead ? 0 : 1;
       statusEl.textContent = 'Покажите руку в кадр';
       hud.textContent = input.lead
-        ? `ведущая рука: ${input.lead.fingers} · вторая рука: ${input.tool ? `масштаб ×${scale.toFixed(2)}` : 'нет'} · ${fps.toFixed(0)} fps`
-        : `${fps.toFixed(0)} fps`;
+        ? `ведущая рука: ${input.lead.fingers} · вторая рука: ${input.tool ? `масштаб ×${scale.toFixed(2)}` : 'нет'} · звёзд: ${stars.length} · ${fps.toFixed(0)} fps`
+        : `звёзд: ${stars.length} · ${fps.toFixed(0)} fps`;
     }
   }
   requestAnimationFrame(loop);
